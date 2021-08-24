@@ -2,8 +2,16 @@ import sys
 import cv2
 from matplotlib import pyplot as plt
 import numpy as np
-import argparse
-import imutils
+
+"""
+1.Import 2 images
+2.convert to gray scale
+3.Initiate ORB detector
+4.Find key points and describe them
+5.Match keypoints- Brute force matcher
+6.RANSAC(reject bad keypoints)
+7. Register two images (use homography) 
+"""
 
 """
     Stitcher:
@@ -65,204 +73,131 @@ import imutils
 
 """
 
-def stitchImages():
-  # Load our images
-  img1 = cv2.imread("frames/folder/frame0.jpg")
-  img2 = cv2.imread("frames/folder/frame1.jpg")
 
-  # Change images to gray
-  img1_gray = cv2.cvtColor(img1.copy(), cv2.COLOR_BGR2GRAY)
-  img2_gray = cv2.cvtColor(img2.copy(), cv2.COLOR_BGR2GRAY)
+def stitchImages(img1, img2):
+    # Convert images to gray scale
+    img1_gray = cv2.cvtColor(img1.copy(), cv2.COLOR_BGR2GRAY)
+    img2_gray = cv2.cvtColor(img2.copy(), cv2.COLOR_BGR2GRAY)
 
-  """
-  # Check if images are ok
-  #cv2.imshow("first image",img1_gray)
-  #cv2.imshow("second image",img2_gray)
-  #cv2.waitKey(0)
-  #cv2.destroyAllWindows();
-  """
+    # Create orb detector and detect keypoint and descriptors
+    orb = cv2.ORB_create(nfeatures=2000)
 
-  # Create orb detector and detect keypoint and descriptors
-  orb = cv2.ORB_create(nfeatures=2000)
+    # Find keypoints and descriptors with orb
+    keypoints1, descriptors1 = orb.detectAndCompute(img1_gray, None)
+    keypoints2, descriptors2 = orb.detectAndCompute(img2_gray, None)
 
-  # Find keypoints and descriptors with orb
-  keypoints1 , descriptors1 = orb.detectAndCompute(img1_gray,None)
-  keypoints2 , descriptors2 = orb.detectAndCompute(img2_gray,None)
+    # Create instance of  Brufe Force Matcher (BFMatcher), it will find all the matching keypoints on two images.
+    bruteForce = cv2.BFMatcher_create(cv2.NORM_HAMMING)
 
-  """
-  # Check that keypoints exists
-  
-  cv2.imshow("Image with keypoints",cv2.drawKeypoints(img1,keypoint1,None,(255,0,255)))
-  cv2.waitKey(0)
-  cv2.destroyAllWindows();
-  """
-
-  # Create BFMatcher obejct, it will find all the matching keypoints on two images.
-  # NORM_HAMMING is a normType that specifies the distance as a measurement of similarity
-  bf = cv2.BFMatcher_create(cv2.NORM_HAMMING)
-
-  #Find matching poitns
-  matches = bf.knnMatch(descriptors1, descriptors2,k=2)
-
-  """
-  # Check for keypoints and Descriptors
-
-  print(keypoints1[0].pt)
-  print(keypoints1[0].size)
-  print("Descriptor of the first keypoint: ")
-  print(descriptors2[0])
-  """
-
-  """
-  # Show matches:
-
-  img1 = cv2.cvtColor(img1,cv2.COLOR_RGB2BGR)
-  img2 = cv2.cvtColor(img2,cv2.COLOR_RGB2BGR)
-  matches = sorted(matches, key = lambda x:x.distance)
-  img3 = cv2.drawMatches(img1, keypoints1, img2, keypoints2, matches[:20], None ,flags=2)
-  plt.imshow(img3)
-  plt.show()
+    # Find matching points using knn algorithm which finds the keypoints
+    matches = bruteForce.knnMatch(descriptors1, descriptors2, k=2)
 
 
-  """
+    # Show the image with matches
+    #img3 = draw_matches(img1_gray,keypoints1,img2_gray,keypoints2,all_matches[:30])
+    #img3 = cv2.drawMatches(img2,keypoints2,img1,keypoints1,matches[:30],None)
 
-  """
-  # Show the image with matches
-  
-  img3 = draw_matches(img1_gray,keypoints1,img2_gray,keypoints2,all_matches[:30])
-  cv2.imshow("image",cv2.resize(img3,dsize=(1200,1200),interpolation=cv2.INTER_CUBIC))
-  cv2.waitKey(0)
-  """
-
-  # Finding the best matches
-  good = []
-  for m, n in matches:
-      if m.distance < 0.6 * n.distance:
-        good.append(m)
-
-  # Set minimum match condition
-  MIN_MATCH_COUNT = 10
-
-  if len(good) > MIN_MATCH_COUNT:
-    # Convert keypoints to an argument for findHomography
-    src_pts = np.float32([keypoints1[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
-    dst_pts = np.float32([keypoints2[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
-
-    # Establish a homography
-    M, _ = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
-
-    result = warpImages(img2, img1, M)
-    #result = trim(result)
+    img3 = cv2.drawMatches(img1, keypoints1,  img2, keypoints2, matches[:10], None,flags=None)
+    img4 = cv2.drawKeypoints(img1,keypoints1,None,flags=None)
 
     plt.figure()
-    plt.imshow(result[:,:,::-1])
+    plt.imshow(img3[:,:,::-1])
     plt.axis('off')
     plt.show()
 
-    cv2.imshow("result" ,result)
-    cv2.waitKey(0)
+
+    # Finding the best matches using David Lowe’s ratio test
+    bestMatches = []
+    for m, n in matches:
+        if m.distance < 0.6 * n.distance:
+            bestMatches.append(m)
+
+    # Minimum amount of matches in order to stitch the images.
+    minMatchCount = 10
+
+    # Check if bestMatches has the minimum amount of keypoints required for stitching.
+    if len(bestMatches) > minMatchCount:
+        # Convert keypoints to an argument for findHomography.
+        # match.queryIdx give the index of the descriptor in the list of query descriptors
+        # the list of the query descriptors is of the image we would like to spread
+        # the others is the training descriptors for training, this is the routine before homography
+
+        src_pts = np.float32([keypoints1[m.queryIdx].pt for m in bestMatches]).reshape(-1, 1, 2)
+        dst_pts = np.float32([keypoints2[m.trainIdx].pt for m in bestMatches]).reshape(-1, 1, 2)
+
+        # Establish a homography
+        # we will use RANSAC to reject "bad keypoints"
+        homography, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+
+        result = warpImages(img2, img1, homography)
+        #cuttingMask(result)
+
+        plt.figure()
+        plt.imshow(result[:,:,::-1])
+        plt.axis('off')
+        plt.show()
+
 
 def draw_matches(img1, keypoints1, img2, keypoints2, matches):
-  r, c = img1.shape[:2]
-  r1,c1 = img2.shape[:2]
+    r, c = img1.shape[:2]
+    r1, c1 = img2.shape[:2]
 
-  # Create a blank image with the size of the first image + second image
-  output_img = np.zeros((max([r, r1]), c+c1, 3), dtype='uint8')
-  output_img[:r,:c,:] = np.dstack([img1,img1,img1])
-  output_img[:r1,c:c+c1,:] = np.dstack([img2,img2,img2])
+    # Create a blank image with the size of the first image + second image
+    output_img = np.zeros((max([r, r1]), c + c1, 3), dtype='uint8')
+    output_img[:r, :c, :] = np.dstack([img1, img1, img1])
+    output_img[:r1, c:c + c1, :] = np.dstack([img2, img2, img2])
 
-  # Go over all of the matching points and extract them for match in matches:
+    # Go over all of the matching points and extract them for match in matches:
 
-  for match in matches:
-    img1_idx = match.queryIdx
-    img2_idx = match.queryIdx
-    (x1,y1) = keypoints1[img1_idx].pt
-    (x2,y2) = keypoints2[img2_idx].pt
+    for match in matches:
+        img1_idx = match.queryIdx
+        img2_idx = match.queryIdx
+        (x1, y1) = keypoints1[img1_idx].pt
+        (x2, y2) = keypoints2[img2_idx].pt
 
-    #Draw circles on the keypoints
-    cv2.circle(output_img, (int(x1),int(y1)),4,(0,255,255),1)
-    cv2.circle(output_img, (int(x2) + c, int(y2)), 4, (0, 255, 255), 1)
+        # Draw circles on the keypoints
+        cv2.circle(output_img, (int(x1), int(y1)), 4, (0, 255, 255), 1)
+        cv2.circle(output_img, (int(x2) + c, int(y2)), 4, (0, 255, 255), 1)
 
-    # Connect the same keypoints
-    cv2.line(output_img,(int(x1),int(y1)),(int(x2) + c ,int(y2)),(0,255,255),1)
+        # Connect the same keypoints
+        cv2.line(output_img, (int(x1), int(y1)), (int(x2) + c, int(y2)), (0, 255, 255), 1)
 
-  return output_img;
-
-def warpImages(img1, img2, H):
-  rows1, cols1 = img1.shape[:2]
-  rows2, cols2 = img2.shape[:2]
-
-  list_of_points_1 = np.float32([[0, 0], [0, rows1], [cols1, rows1], [cols1, 0]]).reshape(-1, 1, 2)
-  temp_points = np.float32([[0, 0], [0, rows2], [cols2, rows2], [cols2, 0]]).reshape(-1, 1, 2)
-
-  # When we have established a homography we need to warp perspective
-  # Change field of view
-  list_of_points_2 = cv2.perspectiveTransform(temp_points, H)
-
-  list_of_points = np.concatenate((list_of_points_1, list_of_points_2), axis=0)
-
-  [x_min, y_min] = np.int32(list_of_points.min(axis=0).ravel() - 0.5)
-  [x_max, y_max] = np.int32(list_of_points.max(axis=0).ravel() + 0.5)
-
-  translation_dist = [-x_min, -y_min]
-
-  H_translation = np.array([[1, 0, translation_dist[0]], [0, 1, translation_dist[1]], [0, 0, 1]])
-
-  output_img = cv2.warpPerspective(img2, H_translation.dot(H), (x_max - x_min, y_max - y_min))
-  output_img[translation_dist[1]:rows1 + translation_dist[1], translation_dist[0]:cols1 + translation_dist[0]] = img1
-
-  return output_img
-
-def trim(stitched):
-  # convert to grayscale
-  gray = cv2.cvtColor(stitched, cv2.COLOR_BGR2GRAY)
-
-  # The shit that is around our picture is now in thresh
-  print("[INFO] cropping...")
-  stitched = cv2.copyMakeBorder(stitched, 10, 10, 10, 10, cv2.BORDER_CONSTANT, (0, 0, 0))
-  # convert the stitched image to grayscale and threshold it
-  # such that all pixels greater than zero are set to 255
-  # (foreground) while all others remain 0 (background)
-  gray = cv2.cvtColor(stitched, cv2.COLOR_BGR2GRAY)
-  thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY)[1]
+    return output_img;
 
 
-  # Max size of rectangle
-  cnts = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL,
-                          cv2.CHAIN_APPROX_SIMPLE)
-  cnts = imutils.grab_contours(cnts)
-  c = max(cnts, key=cv2.contourArea)
-  # allocate memory for the mask which will contain the
-  # rectangular bounding box of the stitched image region
-  mask = np.zeros(thresh.shape, dtype="uint8")
-  (x, y, w, h) = cv2.boundingRect(c)
-  cv2.rectangle(mask, (x, y), (x + w, y + h), 255, -1)
+def warpImages(img1, img2, homography):
+    rows1, cols1 = img1.shape[:2]
+    rows2, cols2 = img2.shape[:2]
 
-  # create two copies of the mask: one to serve as our actual
-  # minimum rectangular region and another to serve as a counter
-  # for how many pixels need to be removed to form the minimum
-  # rectangular region
-  minRect = mask.copy()
-  sub = mask.copy()
-  # keep looping until there are no non-zero pixels left in the
-  # subtracted image
-  while cv2.countNonZero(sub) > 0:
-    # erode the minimum rectangular mask and then subtract
-    # the thresholded image from the minimum rectangular mask
-    # so we can count if there are any non-zero pixels left
-    minRect = cv2.erode(minRect, None)
-    sub = cv2.subtract(minRect, thresh)
+    list_of_points_1 = np.float32([[0, 0], [0, rows1], [cols1, rows1], [cols1, 0]]).reshape(-1, 1, 2)
+    temp_points = np.float32([[0, 0], [0, rows2], [cols2, rows2], [cols2, 0]]).reshape(-1, 1, 2)
 
-    # find contours in the minimum rectangular mask and then
-    # extract the bounding box (x, y)-coordinates
-    cnts = cv2.findContours(minRect.copy(), cv2.RETR_EXTERNAL,
-                            cv2.CHAIN_APPROX_SIMPLE)
-    cnts = imutils.grab_contours(cnts)
-    c = max(cnts, key=cv2.contourArea)
-    (x, y, w, h) = cv2.boundingRect(c)
-    # use the bounding box coordinates to extract the our final
-    # stitched image
+    # When we have established a homography we need to warp perspective
+    # Change field of view
+    list_of_points_2 = cv2.perspectiveTransform(temp_points, homography)
 
-    #stitched = stitched[y:y + h, x:x + w]
+    list_of_points = np.concatenate((list_of_points_1, list_of_points_2), axis=0)
 
-  return stitched
+    # Ravel is a np function that takes a 2 or more dim array and changes it to flattend array.
+    [x_min, y_min] = np.int32(list_of_points.min(axis=0).ravel())
+    [x_max, y_max] = np.int32(list_of_points.max(axis=0).ravel())
+
+    translation_dist = [-x_min, -y_min]
+
+    H_translation = np.array([[1, 0, translation_dist[0]],
+                              [0, 1, translation_dist[1]],
+                              [0, 0, 1]])
+
+    # x_max - x_min, y_max - y_min = size of the image
+    output_img = cv2.warpPerspective(img2, H_translation.dot(homography), (x_max - x_min, y_max - y_min))
+    output_img[translation_dist[1]:rows1 + translation_dist[1], translation_dist[0]:cols1 + translation_dist[0]] = img1
+
+    return output_img
+
+
+def cuttingMask(img):
+    pass
+    # plt.figure()
+    # plt.imshow(image[:,:,::-1])
+    # plt.axis('off')
+    # plt.show()
